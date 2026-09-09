@@ -1,0 +1,21 @@
+name: 自动同步上游代码
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天北京时间 8:00 自动检查并同步一次
+  workflow_dispatch: # 支持在 Actions 页面手动随时点击运行
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 同步上游分支
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          gh repo sync ${{ github.repository }} -b main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
