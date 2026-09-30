@@ -17,6 +17,7 @@ env:
   UPSTREAM_REPO: byJoey/cfnew
   UPSTREAM_BRANCH: main
   SYNC_BRANCH: sync/upstream-main
+  GENERATED_FILE: 少年你相信光吗
 
 jobs:
   sync:
@@ -47,9 +48,20 @@ jobs:
 
           git checkout -B "${SYNC_BRANCH}" origin/main
           if ! git merge --no-edit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
-            git merge --abort || true
-            echo '上游与 Fork 存在无法自动合并的冲突，请手动处理。' >&2
-            exit 1
+            # 该文件是由 obfuscate.yml 根据“明文源吗”自动生成的混淆产物。
+            # 它不参与 Pages 部署；保留 Fork 版本，待源文件合并后由混淆工作流重新生成。
+            conflict_files=$(git diff --name-only --diff-filter=U)
+            if [[ "${conflict_files}" == "${GENERATED_FILE}" ]]; then
+              echo "仅 ${GENERATED_FILE} 发生冲突，保留 Fork 版本并继续创建同步 PR。"
+              git checkout --ours -- "${GENERATED_FILE}"
+              git add -- "${GENERATED_FILE}"
+              git commit --no-edit -m 'Merge upstream while preserving generated file'
+            else
+              git merge --abort || true
+              echo '上游存在非生成文件的合并冲突，请手动处理：' >&2
+              echo "${conflict_files}" >&2
+              exit 1
+            fi
           fi
 
           git push --force-with-lease origin "${SYNC_BRANCH}"
@@ -77,7 +89,7 @@ jobs:
               --base main \
               --head "${SYNC_BRANCH}" \
               --title '同步上游代码' \
-              --body "此 PR 由 GitHub Actions 自动创建，用于将上游仓库 ${UPSTREAM_REPO}:${UPSTREAM_BRANCH} 的最新变更同步到本 Fork。请在合并前检查差异与潜在冲突。"
+              --body "此 PR 由 GitHub Actions 自动创建，用于同步 ${UPSTREAM_REPO}:${UPSTREAM_BRANCH}。文件 ${GENERATED_FILE} 是由明文源文件自动生成的混淆产物，本次同步保留 Fork 版本；合并源文件后，obfuscate 工作流会重新生成它。"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
