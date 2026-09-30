@@ -5,17 +5,79 @@ on:
     - cron: '0 0 * * *' # 每天北京时间 8:00 自动检查并同步一次
   workflow_dispatch: # 支持在 Actions 页面手动随时点击运行
 
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: byJoey/cfnew
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: sync/upstream-main
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 同步上游分支
+      - name: 合并上游代码并推送同步分支
+        id: sync
+        shell: bash
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          gh repo sync ${{ github.repository }} -b main
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}" --no-tags
+
+          # 上游没有新提交时直接结束，避免创建空 PR。
+          if git diff --quiet HEAD "upstream/${UPSTREAM_BRANCH}"; then
+            echo 'has_changes=false' >> "$GITHUB_OUTPUT"
+            echo '上游没有新的变化。'
+            exit 0
+          fi
+
+          git checkout -B "${SYNC_BRANCH}" origin/main
+          if ! git merge --no-edit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
+            git merge --abort || true
+            echo '上游与 Fork 存在无法自动合并的冲突，请手动处理。' >&2
+            exit 1
+          fi
+
+          git push --force-with-lease origin "${SYNC_BRANCH}"
+          echo 'has_changes=true' >> "$GITHUB_OUTPUT"
+
+      - name: 创建或更新 Pull Request
+        if: steps.sync.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          existing_pr=$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --head "${SYNC_BRANCH}" \
+            --base main \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [[ -n "${existing_pr}" ]]; then
+            echo "已有开放的同步 PR #${existing_pr}，不重复创建。"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base main \
+              --head "${SYNC_BRANCH}" \
+              --title '同步上游代码' \
+              --body "此 PR 由 GitHub Actions 自动创建，用于将上游仓库 ${UPSTREAM_REPO}:${UPSTREAM_BRANCH} 的最新变更同步到本 Fork。请在合并前检查差异与潜在冲突。"
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
