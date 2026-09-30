@@ -36,6 +36,7 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config core.quotePath false
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${UPSTREAM_BRANCH}" --no-tags
 
@@ -50,8 +51,8 @@ jobs:
           if ! git merge --no-edit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
             # 该文件是由 obfuscate.yml 根据“明文源吗”自动生成的混淆产物。
             # 它不参与 Pages 部署；保留 Fork 版本，待源文件合并后由混淆工作流重新生成。
-            conflict_files=$(git diff --name-only --diff-filter=U)
-            if [[ "${conflict_files}" == "${GENERATED_FILE}" ]]; then
+            mapfile -d '' conflict_files < <(git diff --name-only --diff-filter=U -z)
+            if [[ ${#conflict_files[@]} -eq 1 && "${conflict_files[0]}" == "${GENERATED_FILE}" ]]; then
               echo "仅 ${GENERATED_FILE} 发生冲突，保留 Fork 版本并继续创建同步 PR。"
               git checkout --ours -- "${GENERATED_FILE}"
               git add -- "${GENERATED_FILE}"
@@ -59,7 +60,7 @@ jobs:
             else
               git merge --abort || true
               echo '上游存在非生成文件的合并冲突，请手动处理：' >&2
-              echo "${conflict_files}" >&2
+              printf '%s\n' "${conflict_files[@]}" >&2
               exit 1
             fi
           fi
